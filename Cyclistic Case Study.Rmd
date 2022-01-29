@@ -1,0 +1,132 @@
+---
+title: "Cyclistic Case Study"
+author: "Madhav"
+date: "27 January 2022"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Combining data from 12 months of 2021 into one dataframe
+Loading required packages
+```{r Loading Packages}
+#install.packages("tidyverse")
+library(tidyverse)
+```
+
+```{r Combining Datasets}
+library(plyr)
+library(readr)
+
+# import files
+setwd("E:/Career Resumption/Google Data Analytics Coursera/8. Capstone/Case Study 1/Data")
+show_col_types = FALSE
+#getwd()
+files = list.files(pattern="*.csv", full.names = TRUE)
+combined_data = ldply(files, read_csv)
+
+```
+
+```{r Converting into dataframe}
+library(dplyr)
+combined_df <- bind_rows(combined_data, .id = "id")
+glimpse(combined_df)
+```
+## IGNORE - Exporting combined dataframe to CSV for SQL operations
+```{r Export to CSV}
+write.csv(combined_df,"E:\\Career Resumption\\Google Data Analytics Coursera\\8. Capstone\\Case Study 1\\Cyclistic_Tripdata_2021.csv", row.names = FALSE)
+```
+## Cleaning data by handling null values
+Since the combined data has more than 5.6 million rows thus records with null in either fields(18%) can be removed without significantly affecting the analysis. Also in this step non-useful fields would be removed and datatypes would be checked.
+```{r Data Cleaning}
+#Removing non-useful columns
+filtered_df <- combined_df[-c(1,10:13)]
+str(filtered_df)
+filtered_df <- rename(filtered_df, c("ride_id" = "trip_id", "rideable_type" = "ride_type", "started_at" = "start_time", "ended_at"="end_time", "member_casual" = "usertype"))
+table(filtered_df$usertype) #to check if invalid values have creeped in
+
+#Detect number of records with null values for each field
+for (i in 1:ncol(filtered_df)){
+  print(sum(is.na(filtered_df[,i])))
+  cat("\n")
+}
+#Removing records with missing values
+cleaned_df <- filtered_df[!(is.na(filtered_df$end_station_name) | is.na(filtered_df$start_station_name)),]
+sum(is.na(cleaned_df[,8]))
+
+```
+## Feature engineering/data transformation 
+Addition of new fields for better aggregation of data
+```{r Data Transformation}
+cleaned_df$date <- as.Date(cleaned_df$start_time) 
+cleaned_df$month <- format(as.Date(cleaned_df$date), "%m")
+cleaned_df$day <- format(as.Date(cleaned_df$date), "%d")
+cleaned_df$year <- format(as.Date(cleaned_df$date), "%Y")
+cleaned_df$day_of_week <- format(as.Date(cleaned_df$date), "%A")
+cleaned_df$ride_length <- difftime(cleaned_df$end_time, cleaned_df$start_time)
+sum(cleaned_df$ride_length < 0) #to check invalid values
+cleaned_df <- cleaned_df %>%
+  filter(ride_length>0)
+cleaned_df$ride_length <- as.numeric(as.character(cleaned_df$ride_length))
+```
+## IGNORE- Exporting Processed Data for Analysis
+```{r Exporting to RData for Tableau}
+save(cleaned_df, file="Processed_Cyclistic_Trips_2021.RData")
+```
+```{r Export Data}
+install.packages("googlesheets4")
+library("googlesheets4")
+gs4_auth()
+
+ss <- gs4_create("Processed_Tripdata", sheets = cleaned_df)
+```
+## Descriptive Analysis for Visualization
+```{r Descriptive Analysis}
+#Ride Length according to usertype categorized by ridetype
+cleaned_df %>%
+  group_by(usertype, ride_type) %>%
+  summarise(length_of_ride = mean(ride_length)) %>%
+  ggplot(aes(x = usertype, y=length_of_ride)) + geom_bar(stat="identity") + 
+  theme_classic() + labs(title = "Average Ride Length: Casual vs Member", y = "Length of ride(in secs)") + facet_wrap(~ride_type) 
+ggsave("Usertype_RideLength.png")
+
+#Ride length a/c usertype categorized by day of the week
+library(tidyr)
+cleaned_df$day_of_week <- ordered(cleaned_df$day_of_week, levels=c("Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"))
+user_day_df <- cleaned_df %>%
+  group_by(usertype, day_of_week) %>%
+  summarise(length_of_ride = mean(ride_length)) %>%
+  spread(day_of_week, length_of_ride) #long table to wide table
+write.csv(user_day_df,"E:\\Career Resumption\\Google Data Analytics Coursera\\8. Capstone\\Case Study 1\\Usertype_Day_Tripdata_2021.csv", row.names = FALSE)
+  
+#number of rides for users by day_of_week
+day_ridecount_df <- cleaned_df %>%
+  select(day_of_week, trip_id) %>%
+  group_by(day_of_week) %>%
+  summarise(number = n()) #%>% arrange(-number)
+write.csv(day_ridecount_df,"E:\\Career Resumption\\Google Data Analytics Coursera\\8. Capstone\\Case Study 1\\Day_Number_Tripdata_2021.csv", row.names = FALSE)
+
+#Ride count & length summaried by weekday status
+wday_details <- cleaned_df %>%
+  mutate(weekday=wday(start_time, label=TRUE)) %>%
+  group_by(usertype, weekday) %>%
+  summarise(number_of_rides=n(), average_duration=mean(ride_length)) %>%
+  arrange(usertype, weekday)
+ggplot(wday_details, aes(x = weekday, y = number_of_rides, fill = usertype)) +
+  geom_col(position = "dodge") + theme()
+ggsave("Weekday_RideCount.png")
+ggplot(wday_details, aes(x = weekday, y = average_duration, fill = usertype)) +
+  geom_col(position = "dodge") 
+ggsave("Weekday_RideDuration.png")
+write.csv(wday_details,"E:\\Career Resumption\\Google Data Analytics Coursera\\8. Capstone\\Case Study 1\\Weekday_Details_Tripdata_2021.csv", row.names = FALSE)
+
+user_ridetype_df <- cleaned_df %>%
+  group_by(usertype, ride_type) %>%
+  summarise(number_of_rides = n(), length_of_ride = mean(ride_length), median_length = median(ride_length))
+write.csv(user_ridetype_df,"E:\\Career Resumption\\Google Data Analytics Coursera\\8. Capstone\\Case Study 1\\User_Ridetype_Tripdata_2021.csv", row.names = FALSE)
+
+```
